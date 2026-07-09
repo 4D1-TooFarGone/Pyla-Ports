@@ -15,8 +15,10 @@ from utils import (
     api_base_url,
     clean_queue,
     get_brawler_list,
+    get_brawler_stats,
     get_discord_link,
     get_latest_version,
+    get_player_info,
     get_playstyles_list,
     load_brawlers_info,
     load_brawler_data,
@@ -28,6 +30,8 @@ from utils import (
 )
 
 early_access = False
+
+INVALID_PLAYER_TAG_MESSAGE = "Player tag is incorrect. Use your Brawl Stars player tag, not your Supercell ID."
 
 PATREON_LINK = "https://www.patreon.com/pyla/membership"
 PATREON_LABEL = "www.patreon.com/c/pyla"
@@ -278,6 +282,60 @@ class WebDataService:
         except Exception as e:
             logger.error(f"Failed to save queue data to file: {e}")
         return normalized_items
+
+    def push_all_to_default_target(self) -> dict[str, Any]:
+        self._assert_queue_editable()
+        general_config = self.get_settings_payload("general")
+        target = int(general_config.get("default_trophy_target") or 1000)
+        player_tag = str(general_config.get("player_tag", "")).strip().replace("#", "").replace("%23", "")
+        if not player_tag:
+            raise ValueError("Enter a valid player tag before pushing all brawlers.")
+
+        player_info = get_player_info(player_tag)
+        if not self._has_player_values(player_info):
+            raise ValueError(INVALID_PLAYER_TAG_MESSAGE)
+
+        queue_items = self.get_queue_data()
+        existing_by_key = {entry["brawler"].lower(): entry for entry in queue_items}
+        below_target: dict[str, dict[str, Any]] = {}
+
+        for brawler in self._resolve_brawler_catalog():
+            trophies, win_streak = get_brawler_stats(player_info, brawler)
+            if trophies is None:
+                continue
+
+            current_trophies = int(trophies or 0)
+            if current_trophies >= target:
+                continue
+
+            key = brawler.lower()
+            existing = existing_by_key.get(key, {})
+            below_target[key] = {
+                "brawler": brawler,
+                "type": "trophies",
+                "push_until": target,
+                "trophies": current_trophies,
+                "wins": int(existing.get("wins", 0) or 0),
+                "automatically_pick": bool(existing.get("automatically_pick", True)),
+                "win_streak": int(win_streak or 0),
+            }
+
+        updated_queue = []
+        queued_keys = set()
+        for item in queue_items:
+            key = item["brawler"].lower()
+            if key in below_target:
+                updated_queue.append(below_target[key])
+                queued_keys.add(key)
+            else:
+                updated_queue.append(item)
+
+        for key, item in below_target.items():
+            if key not in queued_keys:
+                updated_queue.append(item)
+
+        self.save_queue_data(updated_queue)
+        return {"items": self.get_queue_data(), "added_count": len(below_target)}
 
     def _sync_running_queue_from_saved_file(self):
         runtime_status = self.runtime_manager.get_status()
@@ -556,6 +614,55 @@ class WebDataService:
             self._save_config("cfg/debug_settings.toml", self._normalize_debug_settings(config))
 
         return self.get_settings_payload(section)
+
+    def get_player_info_payload(self, player_tag: str) -> dict[str, Any]:
+        player_tag = (player_tag or "").strip()
+        clean_tag = player_tag.replace("#", "").replace("%23", "")
+        if not clean_tag:
+            return {"ok": True, "player_tag": "", "player_name": "", "stats": {}}
+
+        player_info = get_player_info(clean_tag)
+        if not self._has_player_values(player_info):
+            return {
+                "ok": False,
+                "message": INVALID_PLAYER_TAG_MESSAGE,
+                "player_tag": clean_tag,
+                "stats": {},
+                "code": "INVALID_PLAYER_TAG",
+            }
+
+        stats = {}
+        brawler_catalog = self._resolve_brawler_catalog()
+        for brawler in brawler_catalog:
+            trophies, win_streak = get_brawler_stats(player_info, brawler)
+            if trophies is None and win_streak is None:
+                continue
+            stats[brawler] = {
+                "trophies": int(trophies or 0),
+                "win_streak": int(win_streak or 0),
+            }
+
+        if brawler_catalog and not stats:
+            return {
+                "ok": False,
+                "message": INVALID_PLAYER_TAG_MESSAGE,
+                "player_tag": clean_tag,
+                "stats": {},
+                "code": "INVALID_PLAYER_TAG",
+            }
+
+        return {
+            "ok": True,
+            "player_tag": clean_tag,
+            "player_name": player_info.get("name", ""),
+            "stats": stats,
+        }
+
+    @staticmethod
+    def _has_player_values(player_info: Any) -> bool:
+        if not isinstance(player_info, dict):
+            return False
+        return bool(player_info.get("name") and isinstance(player_info.get("brawlers"), list) and player_info.get("brawlers"))
 
     def get_match_history_payload(self) -> dict[str, Any]:
         csv_path = resolve_project_path("cfg", "match_history.csv")

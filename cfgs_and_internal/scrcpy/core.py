@@ -135,6 +135,8 @@ class Client:
         res = self.__video_socket.recv(4)
         self.resolution = struct.unpack(">HH", res)
         self.__video_socket.setblocking(False)
+        self.__video_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.control_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     def __deploy_server(self) -> None:
         """
@@ -221,7 +223,7 @@ class Client:
 
     def __stream_loop(self) -> None:
         """
-        Core loop for video parsing
+        Core loop for video parsing with frame skipping
         """
         codec = CodecContext.create("h264", "r")
         while self.alive:
@@ -230,15 +232,18 @@ class Client:
                 if raw_h264 == b"":
                     raise ConnectionError("Video stream is disconnected")
                 packets = codec.parse(raw_h264)
+                latest_raw_frame = None
                 for packet in packets:
                     frames = codec.decode(packet)
-                    for frame in frames:
-                        frame = frame.to_ndarray(format="rgb24")
-                        if self.flip:
-                            frame = cv2.flip(frame, 1)
-                        self.last_frame = frame
-                        self.resolution = (frame.shape[1], frame.shape[0])
-                        self.__send_to_listeners(EVENT_FRAME, frame)
+                    if frames:
+                        latest_raw_frame = frames[-1]
+                if latest_raw_frame is not None:
+                    frame = latest_raw_frame.to_ndarray(format="rgb24")
+                    if self.flip:
+                        frame = cv2.flip(frame, 1)
+                    self.last_frame = frame
+                    self.resolution = (frame.shape[1], frame.shape[0])
+                    self.__send_to_listeners(EVENT_FRAME, frame)
             except (BlockingIOError, InvalidDataError):
                 time.sleep(0.01)
                 if not self.block_frame:

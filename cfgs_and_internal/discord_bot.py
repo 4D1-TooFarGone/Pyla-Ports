@@ -1,13 +1,9 @@
 from io import BytesIO
-import os
 
-import discord
 from discord import app_commands
-from discord.app_commands import Choice, Range
 import discord
-from typing import Literal
 from PIL import Image
-from utils import load_toml_as_dict, get_brawler_list, save_brawler_data, load_brawler_data, get_playstyles_list
+from utils import load_toml_as_dict
 from window_controller import WindowController
 try:
     from early_access.early_access import register_early_access_commands

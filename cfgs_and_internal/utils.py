@@ -5,8 +5,6 @@ import math
 import os
 import random
 import ssl
-import subprocess
-import sys
 import threading
 import time
 from io import BytesIO
@@ -154,6 +152,10 @@ def load_toml_as_dict(file_path, cache=True):
         print(f"Error loading {full_path}: {e}")
         return {}
 
+def invalidate_toml_cache(file_path):
+    full_path = PROJECT_ROOT / str(file_path).lstrip('/\\')
+    del cached_toml[str(full_path)]
+
 
 def save_dict_as_toml(data, file_path):
     full_path = PROJECT_ROOT / str(file_path).lstrip('/\\')
@@ -214,7 +216,7 @@ def load_brawler_data():
 def load_all_brawlers_names():
     brawler_names_path = resolve_project_path("cfg", "names.json")
     if not brawler_names_path.exists():
-        return []
+        return {}
     try:
         with open(brawler_names_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -222,7 +224,7 @@ def load_all_brawlers_names():
     except Exception as e:
         traceback.print_exc()
         print(f"Error loading brawler names from {brawler_names_path}: {e}")
-        return []
+        return {}
 
 
 def api_update_brawler_data(brawler_data):
@@ -410,7 +412,7 @@ def save_brawler_icon(brawler_name):
     print(f"Icon not found for brawler '{brawler_name}'")
 
 
-PYLA_VERSION = "0.8.11"
+PYLA_VERSION = "0.8.14"
 
 
 def get_latest_version():
@@ -795,23 +797,3 @@ def clamp(x: int, low: int, high: int) -> int:
     return x
 
 JOYSTICK_RADIUS = 75
-
-def debug_beep():
-    def _beep():
-        try:
-            if os.name == 'nt':
-                import winsound
-                winsound.Beep(1200, 500)
-            elif sys.platform == 'darwin':
-                subprocess.run(
-                    ['afplay', '/System/Library/Sounds/Glass.aiff'],
-                    capture_output=True, timeout=2
-                )
-            else:
-                subprocess.run(
-                    ['paplay', '/usr/share/sounds/freedesktop/stereo/complete.oga'],
-                    capture_output=True, timeout=2
-                )
-        except Exception:
-            pass
-    threading.Thread(target=_beep, daemon=True).start()

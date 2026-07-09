@@ -3,7 +3,7 @@ import time
 import cv2
 
 from state_finder import get_state
-from trophy_observer import TrophyObserver
+from trophy_observer import TrophyObserver, MatchResult
 from utils import find_template_center, load_toml_as_dict, notify_user, save_brawler_data
 
 try:
@@ -52,14 +52,15 @@ class StageManager:
             'star_drop_demonic': lambda: self.click_star_drop("demonic"),
             'star_drop_starr_nova': lambda: self.click_star_drop("starr_nova"),
             'trophy_reward': lambda: self.window_controller.press("proceed"),
-            'starr_nova_event': lambda: self.window_controller.press("middle_got_it"),
+            'prestige_milestone': lambda: self.window_controller.press("continue_or_equip"),
             'end_draw': self.end_game,
             'end_victory': self.end_game,
             'end_defeat': self.end_game,
             'end_trio_showdown_0': self.end_game,
             'end_trio_showdown_1': self.end_game,
             'end_trio_showdown_2': self.end_game,
-            'end_trio_showdown_3': self.end_game
+            'end_trio_showdown_3': self.end_game,
+            'nano_noodles': self.click_nano_noodles,
         }
         self.matches_since_last_webhook_ping = 0
         self.ping_every_x_match = load_toml_as_dict("cfg/webhook_config.toml")['ping_every_x_match']
@@ -154,19 +155,11 @@ class StageManager:
                         print(f"Skipping {select_brawler}")
                     if self._should_stop() or self._should_pause():
                         return
-                    if len(self.brawlers_pick_data) < 1:
-                        print("No more brawlers selected for pushing in the menu. Bot will now pause itself until closed.")
-                        screenshot = self.window_controller.screenshot()
-                        notify_user("completed", screenshot, self)
-                        print("Bot stopping: all targets completed with no more brawlers.")
-                        self.window_controller.release_movement()
-                        self.window_controller.close()
-                        sys.exit(0)
                     current_brawler = self.brawlers_pick_data.pop(0)
                     self.brawlers_pick_data.append(current_brawler)
                     next_brawler_name = self.brawlers_pick_data[0]['brawler']
                     self.quit_shop()
-                    select_brawler = self.Lobby_automation.select_brawler(next_brawler_name, runtime_control=self.runtime_control)
+                    select_brawler = self.Lobby_automation.select_brawler(next_brawler_name, self.get_latest_state, runtime_control=self.runtime_control)
                 if select_brawler == "aborted" or select_brawler == "stuck":
                     return
                 if select_brawler == "success":
@@ -210,24 +203,44 @@ class StageManager:
         self._star_drop_thread = threading.Thread(target=_handle_drop, daemon=True)
         self._star_drop_thread.start()
 
-    def end_game(self):
-        self.window_controller.release_all_touches()
+    def click_nano_noodles(self):
+        noodle_x, noodle_y = 960, 740
+        offset_x = 330 * self.window_controller.width_ratio
+        self.window_controller.click(
+            noodle_x,
+            noodle_y,
+            already_include_ratio=False
+        )
+        time.sleep(0.1)
+        self.window_controller.click(
+            noodle_x + offset_x,
+            noodle_y,
+            already_include_ratio=False
+        )
+        time.sleep(0.1)
+        self.window_controller.click(
+            noodle_x - offset_x,
+            noodle_y,
+            already_include_ratio=False
+        )
 
+    def end_game(self):
         screenshot = self.window_controller.screenshot()
 
-        found_game_result = False
         current_state = get_state(screenshot)
         button_pressed = False
         end_screen_time = time.time()
-        
+        parsed_result = None
         while current_state.startswith("end") and time.time() - end_screen_time < 35:
 
-            if time.time() - self.time_since_last_stat_change > 25:
-                found_game_result = '_'.join(current_state.split("_")[1:])
+            if time.time() - self.time_since_last_stat_change > 25 and parsed_result is None :
+                raw_found_result = '_'.join(current_state.split("_")[1:])
+                parsed_result = self.Trophy_observer.parse_game_result(raw_found_result)
+
                 current_brawler = self.brawlers_pick_data[0]['brawler']
                 power_level = None if not early_access else get_brawler_stats(get_player_info(self.player_tag), current_brawler, power_level=True)[2]
-                self.Trophy_observer.add_trophies(found_game_result, current_brawler, self.playstyle_info, power_level)
-                self.Trophy_observer.add_win(found_game_result)
+                self.Trophy_observer.add_trophies(parsed_result, current_brawler, self.playstyle_info, power_level)
+                self.Trophy_observer.add_win(parsed_result)
                 self.time_since_last_stat_change = time.time()
                 values = {
                     "trophies": self.Trophy_observer.current_trophies,
@@ -239,18 +252,18 @@ class StageManager:
                 self.brawlers_pick_data[0]['win_streak'] = self.Trophy_observer.win_streak
                 save_brawler_data(self.brawlers_pick_data)
 
-            if not button_pressed and self.play_again_on_win and found_game_result == "victory" and not self._should_pause() and not self._should_stop():
+            if not button_pressed and self.play_again_on_win and parsed_result and parsed_result.result == MatchResult.VICTORY and not self._should_pause() and not self._should_stop():
                 self.window_controller.press("play_again")
                 button_pressed = True
             else:
                 print("Game has ended, proceeding")
                 self.window_controller.press("proceed")
-            
+
             time.sleep(3)
             screenshot = self.window_controller.screenshot()
             current_state = get_state(screenshot)
-        
-        if self.play_again_on_win and found_game_result == "victory" and not self._should_pause():
+
+        if self.play_again_on_win and parsed_result and parsed_result.result == MatchResult.VICTORY and not self._should_pause():
             print("Waiting for match to start...")
             start_wait_time = time.time()
             while time.time() - start_wait_time < 25:
@@ -263,11 +276,13 @@ class StageManager:
                     return
                 if self._sleep_interruptible(0.5):
                     break
-            
-            print("Match did not start within 25s, proceeding to return to lobby.")
-            self.window_controller.press("proceed")
+
+            print("Match did not start within 25s, restarting the game.")
+            self.window_controller.restart_brawl_stars()
             time.sleep(2)
-        
+        elif time.time() - end_screen_time > 35:
+            print("End screen timeout reached, restarting the game.")
+            self.window_controller.restart_brawl_stars()
         print("Game has ended", current_state)
 
     def quit_shop(self):

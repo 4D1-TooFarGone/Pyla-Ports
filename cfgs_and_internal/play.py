@@ -15,7 +15,7 @@ except ImportError:
         return None
 from state_finder import get_state
 from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info, interpret_pyla_code, \
-    count_mask_pixels, JOYSTICK_RADIUS, clamp, debug_beep, config_bool
+    count_mask_pixels, JOYSTICK_RADIUS, clamp, config_bool
 
 
 brawl_stars_width, brawl_stars_height = 1920, 1080
@@ -57,7 +57,7 @@ class Play:
         self.time_since_super_checked = time.time()
         self.is_super_ready = False
         self.window_controller = window_controller
-        self.TILE_SIZE = bot_config.get("perceived_tile_size", 32)
+        self.TILE_SIZE = bot_config.get("perceived_tile_size", 54)
         self.centered_wall_detection = config_bool(bot_config.get("centered_wall_detection"), False)
         self.centered_wall_crop_size = 640
 
@@ -388,15 +388,15 @@ class Play:
                 closest_teammate = teammate_pos
         return closest_teammate, closest_distance
 
-    def is_there_poison_gas(self, player_data, threshold=10000):
+    def is_there_poison_gas(self, player_data, threshold=7000, area_from_player_checked=1.5):
         actual_player_box = self.get_actual_player_box(player_data) or player_data
         px1, py1, px2, py2 = actual_player_box
         player_width = max(px2 - px1, 1)
         player_height = max(py2 - py1, 1)
-        min_x = int(max(px1 - player_width, 0))
-        max_x = int(min(px2 + player_width, self.window_controller.width))
-        min_y = int(max(py1 - player_height, 0))
-        max_y = int(min(py2 + player_height, self.window_controller.height))
+        min_x = int(max(px1 - player_width*area_from_player_checked, 0))
+        max_x = int(min(px2 + player_width*area_from_player_checked, self.window_controller.width))
+        min_y = int(max(py1 - player_height*area_from_player_checked, 0))
+        max_y = int(min(py2 + player_height*area_from_player_checked, self.window_controller.height))
 
         if min_x >= max_x or min_y >= max_y:
             return {
@@ -488,8 +488,8 @@ class Play:
         if 'wall' not in data.keys() or not data['wall']:
             data['wall'] = []
 
-        if 'bushes' not in data.keys() or not data['bushes']:
-            data['bushes'] = []
+        if 'bush' not in data.keys() or not data['bush']:
+            data['bush'] = []
 
         return False if incomplete else data
 
@@ -528,7 +528,7 @@ class Play:
                 'teammate_data': data['teammate'],
                 'brawler': brawler,
                 'walls': data['wall'],
-                'bushes': data['bushes'],
+                'bushes': data['bush'],
                 'brawlers_info': self.brawlers_info,
                 'must_brawler_hold_attack': self.must_brawler_hold_attack,
                 'is_gadget_ready': self.is_gadget_ready,

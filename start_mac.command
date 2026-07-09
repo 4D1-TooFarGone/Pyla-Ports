@@ -13,9 +13,36 @@ fi
 # --- run from source ---
 VENV_DIR=".venv"
 
+# scrcpy-client requires Python <3.13, so avoid newer default python3 installs.
+PYTHON_BIN=""
+for candidate in python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        ver="$("$candidate" -c 'import sys; print(sys.version_info[0], sys.version_info[1])')"
+        major="${ver% *}"
+        minor="${ver#* }"
+        if [ "$major" -eq 3 ] && [ "$minor" -lt 13 ]; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo "Error: no compatible Python (<3.13) found. Install one with 'brew install python@3.12'." >&2
+    exit 1
+fi
+
+if [ -d "$VENV_DIR" ]; then
+    venv_ver="$("$VENV_DIR/bin/python3" -c 'import sys; print(sys.version_info[1])' 2>/dev/null || echo "")"
+    if [ -z "$venv_ver" ] || [ "$venv_ver" -ge 13 ]; then
+        echo "Existing virtual environment uses an incompatible Python version, recreating..."
+        rm -rf "$VENV_DIR"
+    fi
+fi
+
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating virtual environment (first run only)..."
-    python3 -m venv "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
 source "$VENV_DIR/bin/activate"

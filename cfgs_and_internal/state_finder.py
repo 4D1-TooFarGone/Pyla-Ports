@@ -1,8 +1,12 @@
 import os
 import sys
 import cv2
+import time
 sys.path.append(os.path.abspath('/'))
 from utils import load_toml_as_dict, config_bool
+
+last_debug_print_time = 0.0
+should_print_debug_info = False
 
 orig_screen_width, orig_screen_height = 1920, 1080
 
@@ -16,11 +20,11 @@ for file in os.listdir(star_drops_path):
 
 end_results_path = r"./images/end_results/"
 
-match_result_crop_region = load_toml_as_dict("./cfg/lobby_config.toml")['lobby']['match_result']
 region_data = load_toml_as_dict("./cfg/lobby_config.toml")['template_matching']
+match_result_crop_region = region_data['match_result']
 
 
-def is_template_in_region(image, template_path, region, threshold=0.7):
+def is_template_in_region(image, template_path, region, threshold=0.75):
     current_height, current_width = image.shape[:2]
     orig_x, orig_y, orig_width, orig_height = region
     width_ratio, height_ratio = current_width / orig_screen_width, current_height / orig_screen_height
@@ -33,6 +37,8 @@ def is_template_in_region(image, template_path, region, threshold=0.7):
     result = cv2.matchTemplate(cropped_image, loaded_template,
                                cv2.TM_CCOEFF_NORMED)
     min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+    if should_print_debug_info:
+        print(f"Template matching for {template_path} in region {region} yielded max_val: {max_val}")
     return max_val > threshold
 
 
@@ -52,7 +58,7 @@ SHOWDOWN_PLACE_THRESHOLD = 0.9
 showdown_place_templates = {
     0: ["1st.png"],
     1: ["2nd.png"],
-    2: ["3rd.png"],
+    2: ["3rd.png", "3rd_alt.png"],
     3: ["4th.png"]
 }
 
@@ -81,23 +87,44 @@ def find_game_result(screenshot):
 
 
 def get_in_game_state(image):
-    game_result = is_in_end_of_a_match(image)
-    if game_result: return f"end_{game_result}"
-    if is_in_lobby(image): return "lobby"
-    if is_in_match_making(image): return "match_making"
-    if is_in_brawler_selection(image): return "brawler_selection"
-    if is_in_shop(image): return "shop"
-    if is_in_offer_popup(image): return "popup"
-    if is_in_brawl_pass(image) or is_in_star_road(image): return "shop"
+    global last_debug_print_time, should_print_debug_info
+    state_finder_debug = config_bool(load_toml_as_dict("cfg/debug_settings.toml").get('state_finder_debug'), False)
+    current_time = time.time()
+    should_print_debug_info = state_finder_debug and (current_time - last_debug_print_time >= 1.0)
+    if should_print_debug_info:
+        last_debug_print_time = current_time
 
-    star_drop_type = is_in_star_drop(image)
-    if star_drop_type:
-        return f"star_drop_{star_drop_type}"
+    try:
+        if should_print_debug_info: print("Checking for match result...")
+        game_result = is_in_end_of_a_match(image)
+        if game_result: return f"end_{game_result}"
+        if should_print_debug_info: print("Checking for lobby...")
+        if is_in_lobby(image): return "lobby"
+        if should_print_debug_info: print("Checking for match making...")
+        if is_in_match_making(image): return "match_making"
+        if should_print_debug_info: print("Checking for brawler selection...")
+        if is_in_brawler_selection(image): return "brawler_selection"
+        if should_print_debug_info: print("Checking for shop")
+        if is_in_shop(image): return "shop"
+        if should_print_debug_info: print("Checking for offer popup...")
+        if is_in_offer_popup(image): return "popup"
+        if should_print_debug_info: print("Checking for brawl pass or star road (shop state)...")
+        if is_in_brawl_pass(image) or is_in_star_road(image): return "shop"
+        if should_print_debug_info: print("Checking for prestige milestone...")
+        if is_in_prestige_milestone(image): return "prestige_milestone"
+        if should_print_debug_info: print("Checking for nano noodles...")
+        if is_in_nano_noodles(image): return "nano_noodles"
+        if should_print_debug_info: print("Checking for star drop...")
+        star_drop_type = is_in_star_drop(image)
+        if star_drop_type:
+            return f"star_drop_{star_drop_type}"
+        if should_print_debug_info: print("Checking for trophy reward...")
+        if is_in_trophy_reward(image):
+            return "trophy_reward"
 
-    if is_in_trophy_reward(image):
-        return "trophy_reward"
-
-    return "match"
+        return "match"
+    finally:
+        should_print_debug_info = False
 
 
 def is_in_shop(image) -> bool:
@@ -105,7 +132,7 @@ def is_in_shop(image) -> bool:
 
 
 def is_in_brawler_selection(image) -> bool:
-    return is_template_in_region(image, states_path + 'brawler_menu_task.png', region_data["brawler_menu_task"])
+    return is_template_in_region(image, states_path + 'brawler_menu_heart.png', region_data["brawler_menu_heart"])
 
 
 def is_in_offer_popup(image) -> bool:
@@ -136,8 +163,11 @@ def is_in_match_making(image):
     return is_template_in_region(image, states_path + "exit_match_making.png", region_data['exit_match_making'])
 
 
-def is_in_starr_nova_event(image):
-    return is_template_in_region(image, states_path + "starr_nova_event.png", region_data['starr_nova_event'])
+def is_in_prestige_milestone(image):
+    return is_template_in_region(image, states_path + "prestige_continue.png", region_data['prestige_continue'])
+
+def is_in_nano_noodles(image):
+    return is_template_in_region(image, states_path + "nano_noodles.png", region_data['nano_noodles'])
 
 
 def is_in_star_drop(image):
@@ -152,5 +182,5 @@ def is_in_star_drop(image):
 
 def get_state(screenshot):
     state = get_in_game_state(screenshot)
-    if config_bool(load_toml_as_dict("cfg/debug_settings.toml").get('verbose_debug'), False): cv2.imwrite(f"./debug_frames/state_screenshot_{state}_{len(os.listdir('./debug_frames'))}.png", cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
+    if config_bool(load_toml_as_dict("cfg/debug_settings.toml").get('state_finder_debug'), False): cv2.imwrite(f"./debug_frames/state_screenshot_{state}_{len(os.listdir('./debug_frames'))}.png", cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
     return state

@@ -80,10 +80,10 @@ debug: bool = False
 """True if super debug mode is enabled."""
 
 # Expected Output Variable
-movement: str = ""
+movement: tuple[float] = (0.0, 0.0)
 """
-SET THIS VARIABLE IN YOUR SCRIPT. 
-The double float representing keys to hold for movement (e.g., 'W', 'AS', '').
+SET THIS VARIABLE IN YOUR SCRIPT.
+The double float representing the position of the joystick to move to. -75 <= x <= 75.
 """
 
 JOYSTICK_RADIUS: int = 75

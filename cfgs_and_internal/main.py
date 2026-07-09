@@ -1,4 +1,5 @@
 import inspect
+import os
 import sys
 
 # Monkey-patch inspect.getfile to prevent Nuitka + PyTorch crash
@@ -106,7 +107,6 @@ def pyla_main(discord_bot, queue_data, stop_event=None, runtime_control=None):
             self.start_state_checker()
             print("Initialization complete, starting main loop.")
             self.picked_first_brawler = False
-            self.playstyle_info = None
             self.time_since_checked_if_brawl_stars_crashed = time.time()
             self.check_if_brawl_stars_crashed_timer = load_toml_as_dict("cfg/time_tresholds.toml")["check_if_brawl_stars_crashed"]
             self.ping_when_stuck = load_toml_as_dict("cfg/webhook_config.toml")["ping_when_stuck"]
@@ -382,6 +382,7 @@ def pyla_main(discord_bot, queue_data, stop_event=None, runtime_control=None):
                     if work_time < target_period:
                         time.sleep(target_period - work_time)
 
+    os.makedirs("debug_frames", exist_ok=True)
     main = Main()
     main.main()
 

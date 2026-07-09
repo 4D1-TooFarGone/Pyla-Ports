@@ -36,6 +36,14 @@ class _SuppressAssetsGetting(logging.Filter):
             and '304 -' in message
         )
 
+class _SuppressHistoryPolling(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not (
+            'GET /api/history ' in message
+            and ' 200 -' in message
+        )
+
 def _configure_request_logging():
     werkzeug_logger = logging.getLogger("werkzeug")
     if not any(isinstance(log_filter, _SuppressRuntimeStatusPolling) for log_filter in werkzeug_logger.filters):
@@ -44,6 +52,8 @@ def _configure_request_logging():
         werkzeug_logger.addFilter(_SuppressQueuePolling())
     if not any(isinstance(log_filter, _SuppressAssetsGetting) for log_filter in werkzeug_logger.filters):
         werkzeug_logger.addFilter(_SuppressAssetsGetting())
+    if not any(isinstance(log_filter, _SuppressHistoryPolling) for log_filter in werkzeug_logger.filters):
+        werkzeug_logger.addFilter(_SuppressHistoryPolling())
 
 
 def _start_discord_bot_thread(app: Flask):
@@ -103,6 +113,11 @@ def create_app(pyla_main, start_discord_bot=False):
         app.logger.exception("Unhandled request error at %s", request.path)
         return jsonify({"ok": False, "message": str(error)}), 500
 
+    @app.get("/api/player-info")
+    def player_info():
+        result = data_service.get_player_info_payload(request.args.get("tag", ""))
+        return jsonify(result), (200 if result.get("ok") else 400)
+
     @app.get("/api/queue")
     def get_queue():
         return jsonify({"items": data_service.get_queue_data()})
@@ -131,6 +146,11 @@ def create_app(pyla_main, start_discord_bot=False):
         payload = request.get_json(silent=True) or {}
         items = data_service.reorder_queue(payload.get("order", []))
         return jsonify({"ok": True, "items": items})
+
+    @app.post("/api/queue/push-all-to-target")
+    def push_all_to_target():
+        result = data_service.push_all_to_default_target()
+        return jsonify({"ok": True, **result})
 
     @app.delete("/api/queue")
     def clear_queue():

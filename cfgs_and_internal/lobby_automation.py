@@ -13,10 +13,10 @@ class LobbyAutomation:
 
     def __init__(self, window_controller):
         self.gray_pixels_treshold = load_toml_as_dict("./cfg/bot_config.toml").get('idle_pixels_minimum', 500)
+        self.idle_reconnect_coords = load_toml_as_dict("cfg/buttons_config.toml")["idle_reconnect"]
         self.ocr_scale_down_factor = max(0.5, min(1, load_toml_as_dict("./cfg/general_config.toml").get('ocr_scale_down_factor', 1)))
         self.ocr_scale_up_factor = 1 / self.ocr_scale_down_factor
         self.all_brawlers_names = load_all_brawlers_names()
-        self.coords_cfg = load_toml_as_dict("./cfg/lobby_config.toml")
         self.window_controller = window_controller
         self.verbose_debug = config_bool(load_toml_as_dict("cfg/debug_settings.toml").get('verbose_debug'), False)
 
@@ -25,10 +25,10 @@ class LobbyAutomation:
         hr = self.window_controller.height_ratio
         x_start, x_end = int(460 * wr), int(1460 * wr)
         y_start, y_end = int(400 * hr), int(675 * hr)
-        gray_pixels = count_hsv_pixels(frame[y_start:y_end, x_start:x_end], (0, 0, 55), (10, 15, 77))
+        gray_pixels = count_hsv_pixels(frame[y_start:y_end, x_start:x_end], (0, 0, 10), (30, 60, 67))
         if self.verbose_debug: print(f"gray pixels (if > {self.gray_pixels_treshold} then bot will try to unidle) :", gray_pixels)
         if gray_pixels > self.gray_pixels_treshold:
-            self.window_controller.click(int(540 * wr), int(630 * hr))
+            self.window_controller.click(self.idle_reconnect_coords[0], self.idle_reconnect_coords[1], already_include_ratio=False)
             print("Idle detected, clicking to unidle")
 
     @staticmethod
@@ -54,8 +54,8 @@ class LobbyAutomation:
         for symbol in [' ', '-', '.', "&"]:
             brawler = brawler.replace(symbol, "")
 
-        x, y = self.coords_cfg['lobby']['brawler_btn'][0]*wr, self.coords_cfg['lobby']['brawler_btn'][1]*hr
-        self.window_controller.click(x, y)
+        x, y = load_toml_as_dict("cfg/buttons_config.toml")["brawlers_menu"]
+        self.window_controller.click(x, y, already_include_ratio=False)
         time.sleep(0.5)
         c = 0
         print("Automatic brawler selection started for", brawler)
@@ -123,7 +123,7 @@ class LobbyAutomation:
                 if self._sleep_interruptible(1, runtime_control, stop_event):
                     print("Brawler selection aborted by user.")
                     return "aborted"
-                select_x, select_y = self.coords_cfg['lobby']['select_btn'][0], self.coords_cfg['lobby']['select_btn'][1]
+                select_x, select_y = load_toml_as_dict("cfg/buttons_config.toml")["select_brawler"]
                 self.window_controller.click(select_x, select_y, already_include_ratio=False)
                 if self._sleep_interruptible(1.5, runtime_control, stop_event):
                     print("Brawler selection aborted by user.")
