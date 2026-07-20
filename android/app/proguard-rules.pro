@@ -1,0 +1,4 @@
+-keep class rikka.shizuku.** { *; }
+-keep class dev.pyla.app.IShellService { *; }
+-keep class dev.pyla.app.IShellService$Stub { *; }
+-keep class dev.pyla.app.ShellUserService { *; }

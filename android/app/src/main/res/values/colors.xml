@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base surfaces — matches web UI CSS vars -->
+    <color name="background">#060608</color>
+    <color name="surface">#0A0B0E</color>
+    <color name="card_bg">#0E0F14</color>
+
+    <!-- Brand accent: #ff2a44 from web UI brand-main -->
+    <color name="brand">#FF2A44</color>
+    <color name="brand_dim">#2AFF2A44</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#8E95A5</color>
+    <color name="text_muted">#5E6473</color>
+
+    <!-- Console -->
+    <color name="console_bg">#08090C</color>
+    <color name="console_text">#22C55E</color>
+
+    <!-- Borders -->
+    <color name="border_light">#14FFFFFF</color>
+    <color name="border_strong">#26FFFFFF</color>
+
+    <!-- Status -->
+    <color name="success">#22C55E</color>
+    <color name="error">#FF4444</color>
+
+    <!-- Legacy aliases for Material theme -->
+    <color name="purple_500">#FF2A44</color>
+    <color name="purple_700">#CC1F35</color>
+    <color name="teal_200">#22C55E</color>
+
+    <!-- Launcher adaptive-icon background (matches the Pyla logo's dark backdrop) -->
+    <color name="ic_launcher_background">#020305</color>
+</resources>

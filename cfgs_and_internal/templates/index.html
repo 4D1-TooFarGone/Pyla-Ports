@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PylaAI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/png" href="/api/assets/support/logo.png">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
+</head>
+<body>
+    <div id="vfx-bg"></div>
+
+    <div class="app-layout">
+        <aside class="sidebar">
+            <div class="brand">
+                <img class="brand-logo" src="/api/assets/support/logo.png" alt="PylaAI logo">
+                <div class="brand-copy">
+                    <h1 class="brand-title">PylaAI</h1>
+                </div>
+            </div>
+
+            <nav class="nav-menu"></nav>
+
+            <div class="sidebar-footer">
+                <div class="system-status">
+                    <span id="sidebarIndicator" class="status-indicator"></span>
+                    <div class="status-text">
+                        <span id="sidebarVersion">PylaAI</span>
+                        <span id="sidebarStatus">Preparing local session...</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">Local Desktop Web UI</p>
+                    <h2 id="pageTitle" class="page-title">Dashboard</h2>
+                </div>
+
+                <div class="header-actions">
+                    <span id="runtimeStatusPill" class="badge badge-outline">Idle</span>
+                </div>
+            </header>
+
+            <div id="alertStack" class="alerts-container"></div>
+
+            <div class="views-wrapper">
+                <section id="view-dashboard" class="view active"></section>
+                <section id="view-queue" class="view"></section>
+                <section id="view-playstyles" class="view"></section>
+                <section id="view-history" class="view"></section>
+                <section id="view-settings" class="view"></section>
+            </div>
+
+            <div id="queueDock" class="queue-dock hidden"></div>
+        </main>
+    </div>
+
+    <div id="tooltip" class="tooltip hidden"></div>
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

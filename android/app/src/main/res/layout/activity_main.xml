@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/background">
+
+    <!-- Scrollable top section -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:padding="28dp"
+            android:paddingTop="64dp">
+
+            <!-- Logo / Brand -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textSize="42sp"
+                android:textStyle="bold"
+                android:textColor="@color/text_primary"
+                android:letterSpacing="0.02"
+                android:layout_marginBottom="6dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="THE #1 BRAWL STARS BOT: ON ANDROID!"
+                android:textSize="11sp"
+                android:textColor="@color/brand"
+                android:letterSpacing="0.15"
+                android:textStyle="bold"
+                android:layout_marginBottom="52dp" />
+
+            <!-- ═══════════════════════════════════════════════════════ -->
+            <!-- SETUP SECTION                                          -->
+            <!-- ═══════════════════════════════════════════════════════ -->
+            <LinearLayout
+                android:id="@+id/layoutSetup"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center_horizontal"
+                android:background="@color/card_bg"
+                android:padding="28dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="First Time Setup"
+                    android:textSize="20sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/text_primary"
+                    android:layout_marginBottom="12dp" />
+
+                <TextView
+                    android:id="@+id/tvSetupStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Tap Install to download packages."
+                    android:textSize="14sp"
+                    android:textColor="@color/text_secondary"
+                    android:gravity="center"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="32dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnConnectShizuku"
+                    android:layout_width="240dp"
+                    android:layout_height="52dp"
+                    android:text="Install"
+                    android:textSize="15sp"
+                    android:backgroundTint="@color/brand"
+                    android:layout_marginBottom="14dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSetupDone"
+                    android:layout_width="240dp"
+                    android:layout_height="52dp"
+                    android:text="Setup Done — Continue"
+                    android:textSize="15sp"
+                    android:textColor="@color/brand"
+                    android:visibility="gone"
+                    app:strokeColor="@color/brand"
+                    app:strokeWidth="1dp"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+
+            </LinearLayout>
+
+            <!-- ═══════════════════════════════════════════════════════ -->
+            <!-- NORMAL SECTION                                         -->
+            <!-- ═══════════════════════════════════════════════════════ -->
+            <LinearLayout
+                android:id="@+id/layoutNormal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center_horizontal"
+                android:background="@color/card_bg"
+                android:padding="28dp"
+                android:visibility="gone">
+
+                <EditText
+                    android:id="@+id/etBotPath"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/tvStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Press Start to launch the bot"
+                    android:textSize="15sp"
+                    android:textColor="@color/text_secondary"
+                    android:gravity="center"
+                    android:lineSpacingExtra="5dp"
+                    android:layout_marginBottom="36dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnStart"
+                    android:layout_width="220dp"
+                    android:layout_height="52dp"
+                    android:text="Start"
+                    android:textSize="16sp"
+                    android:backgroundTint="@color/brand"
+                    android:layout_marginBottom="14dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnOpenBrowser"
+                    android:layout_width="220dp"
+                    android:layout_height="52dp"
+                    android:text="Open PylaAI UI"
+                    android:textSize="16sp"
+                    android:textColor="@color/brand"
+                    android:visibility="gone"
+                    app:strokeColor="@color/brand"
+                    app:strokeWidth="1dp"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnStopBot"
+                    android:layout_width="220dp"
+                    android:layout_height="52dp"
+                    android:text="Stop Bot (force kill)"
+                    android:textSize="15sp"
+                    android:textColor="#FF5252"
+                    android:layout_marginTop="14dp"
+                    app:strokeColor="#FF5252"
+                    app:strokeWidth="1dp"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnReinstallDeps"
+                    android:layout_width="220dp"
+                    android:layout_height="48dp"
+                    android:text="Reinstall Dependencies"
+                    android:textSize="13sp"
+                    android:textColor="@color/text_muted"
+                    android:layout_marginTop="10dp"
+                    style="@style/Widget.MaterialComponents.Button.TextButton" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Console log — fixed at the bottom -->
+    <ScrollView
+        android:id="@+id/consoleScroll"
+        android:layout_width="match_parent"
+        android:layout_height="220dp"
+        android:background="@color/console_bg"
+        android:visibility="gone"
+        android:fillViewport="true">
+
+        <TextView
+            android:id="@+id/tvConsole"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="14dp"
+            android:textSize="11sp"
+            android:textColor="@color/console_text"
+            android:fontFamily="monospace"
+            android:lineSpacingExtra="3dp"
+            android:text="" />
+
+    </ScrollView>
+
+</LinearLayout>
