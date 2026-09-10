@@ -39,11 +39,29 @@ jobs:
     - name: Build executable with PyInstaller
       run: |
         pyinstaller --onefile cfgs_and_internal/main.py
-        cp -R cfgs_and_internal/cfg dist/ || true
+
+        # start_mac.command / start_linux.sh expect a cfgs_and_internal/
+        # folder next to them, with the compiled binary inside it named
+        # pyla_main, alongside every non-Python asset the app reads via a
+        # relative path at runtime (models/ is deliberately excluded here:
+        # it's downloaded on first launch by the start script instead,
+        # since it's too large to ship in every release zip).
+        mkdir -p dist/cfgs_and_internal
+        mv dist/main dist/cfgs_and_internal/pyla_main
+        for dir in cfg images playstyles static templates api scrcpy; do
+          cp -R "cfgs_and_internal/$dir" dist/cfgs_and_internal/
+        done
+
         if [[ "$RUNNER_OS" == "Linux" ]]; then
           cp start_linux.sh dist/start.sh
           chmod +x dist/start.sh
         else
+          chmod +x dist/cfgs_and_internal/pyla_main
+          # Ad-hoc sign so the binary can even launch on Apple Silicon.
+          # This is not a trusted-developer signature, so Gatekeeper will
+          # still warn on first launch (right-click -> Open bypasses it) --
+          # that needs a paid Apple Developer account to fully resolve.
+          codesign --force --deep --sign - dist/cfgs_and_internal/pyla_main || true
           cp start_mac.command dist/start.command
           chmod +x dist/start.command
         fi
@@ -66,6 +84,9 @@ jobs:
   release:
     name: Create GitHub Release
     needs: build
+    # A manual "Run workflow" (workflow_dispatch) is for test builds -- only
+    # a real push to main should publish a public release.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
