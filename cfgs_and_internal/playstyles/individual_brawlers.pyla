@@ -1,0 +1,421 @@
+{"name": "Individual Brawlers", "description": "Each brawler fights with its own tuned tactics (aggression, kiting, retreat distance, teammate reliance, bush ambushing) instead of one shared behavior tree", "brawlers": ["all"], "gamemodes": ["all"], "author": "PylaAI", "date": "2026-07-09"}
+
+# ═══════════════════════════════════════════════════════
+#  SETUP
+# ═══════════════════════════════════════════════════════
+
+_brawler_name = brawler or current_brawler
+brawler_info = brawlers_info.get(_brawler_name)
+
+if not brawler_info:
+    raise ValueError(f"Brawler '{_brawler_name}' not found in brawlers_info.")
+
+persistent_data.setdefault("time_since_holding_attack", None)
+persistent_data.setdefault("last_gadget_use", 0.0)
+
+must_hold = must_brawler_hold_attack(_brawler_name, brawlers_info)
+
+safe_range, attack_range, super_range = get_brawler_range(_brawler_name)
+player_pos = get_entity_pos(player_data)
+
+movement = (0, 0)
+
+
+# ═══════════════════════════════════════════════════════
+#  VECTOR / MOVEMENT HELPERS
+# ═══════════════════════════════════════════════════════
+
+def clampf(value, lo, hi):
+    return max(lo, min(hi, value))
+
+def vec_len(x, y):
+    return math.sqrt(x * x + y * y)
+
+def normalize_move(x, y, radius=JOYSTICK_RADIUS):
+    length = vec_len(x, y)
+    if length <= 0:
+        return (0, 0)
+    scale = radius / length
+    return (x * scale, y * scale)
+
+def is_blocked(move):
+    return is_path_blocked(player_data, move, walls)
+
+def first_unblocked(moves, fallback=None):
+    for move in moves:
+        if not is_blocked(move):
+            return move
+    if fallback is not None:
+        return fallback
+    if moves:
+        return moves[0]
+    return (0, 0)
+
+def move_toward(target_pos):
+    # Real routing around obstacles (grid A*, see Play.get_path_movement)
+    # instead of just guessing 2-3 fixed directions. Still falls back to
+    # the old direct-line heuristic if the router somehow returns
+    # something blocked (defensive — get_path_movement already routes
+    # around walls itself, this should rarely trigger).
+    routed = get_path_movement(player_pos, target_pos, walls)
+    if routed is not None and not is_blocked(routed):
+        return routed
+
+    dx = target_pos[0] - player_pos[0]
+    dy = target_pos[1] - player_pos[1]
+    full = normalize_move(dx, dy)
+    x_only = normalize_move(dx, 0)
+    y_only = normalize_move(0, dy)
+    return first_unblocked([full, x_only, y_only], full)
+
+def move_away_from(target_pos):
+    dx = player_pos[0] - target_pos[0]
+    dy = player_pos[1] - target_pos[1]
+    away_goal = (player_pos[0] + dx, player_pos[1] + dy)
+
+    routed = get_path_movement(player_pos, away_goal, walls)
+    if routed is not None and not is_blocked(routed):
+        return routed
+
+    full = normalize_move(dx, dy)
+    x_only = normalize_move(dx, 0)
+    y_only = normalize_move(0, dy)
+    return first_unblocked([full, x_only, y_only], full)
+
+def strafe_around(target_pos):
+    dx = target_pos[0] - player_pos[0]
+    dy = target_pos[1] - player_pos[1]
+    side = 1 if int(time.time() / 2) % 2 == 0 else -1
+    sx = -dy * side
+    sy = dx * side
+    full = normalize_move(sx, sy)
+    reverse = normalize_move(-sx, -sy)
+    return first_unblocked([full, reverse], full)
+
+def random_safe_movement():
+    options = [
+        (0, -JOYSTICK_RADIUS),
+        (0, JOYSTICK_RADIUS),
+        (-JOYSTICK_RADIUS, 0),
+        (JOYSTICK_RADIUS, 0),
+        normalize_move(JOYSTICK_RADIUS, -JOYSTICK_RADIUS),
+        normalize_move(-JOYSTICK_RADIUS, -JOYSTICK_RADIUS),
+        normalize_move(JOYSTICK_RADIUS, JOYSTICK_RADIUS),
+        normalize_move(-JOYSTICK_RADIUS, JOYSTICK_RADIUS),
+    ]
+    random.shuffle(options)
+    return first_unblocked(options, get_random_movement())
+
+
+# ═══════════════════════════════════════════════════════
+#  PER-BRAWLER TRAIT PROFILE
+# ═══════════════════════════════════════════════════════
+# Individual tuning per brawler, loaded from cfg/brawler_traits/<name>.py
+# (see the loader below). This playstyle is opt-in per brawler: brawlers
+# without a tuned file are not supported yet and raise an error below
+# instead of silently running on a generic guess.
+
+# ─────────────────────────────────────────────────────
+#  Per-brawler file loader
+# ─────────────────────────────────────────────────────
+# Each brawler needs its own file at cfg/brawler_traits/<name>.py. Two
+# shapes are supported:
+#   - trait-only: just sets BRAWLER_TRAIT = {...}, numeric tuning consumed
+#     by the generic combat/movement logic below (e.g. bull.py, piper.py)
+#   - full override: sets `movement` itself, for brawlers whose combat
+#     doesn't fit the generic ranged-combat model at all (e.g. bolt.py) —
+#     when it does, we skip the generic combat/no-enemy decision below
+#     entirely and trust the brawler's own file completely for this frame.
+# The actual file lookup/open/exec happens in trusted host code
+# (utils.run_brawler_trait), never in this sandboxed script — see the
+# script sandbox in utils.is_safe_ast/interpret_pyla_code.
+
+BRAWLER_TRAIT = None
+movement = None
+
+trait_file_found = run_brawler_trait(_brawler_name)
+
+if not trait_file_found:
+    raise ValueError(
+        f"The 'Individual Brawlers' playstyle doesn't have tuned behavior for "
+        f"'{_brawler_name}' yet (missing cfg/brawler_traits/{_brawler_name}.py). "
+        f"Pick a different playstyle for this brawler, or add that file."
+    )
+
+custom_movement_handled = movement is not None
+
+trait = BRAWLER_TRAIT or {}
+
+aggression = clampf(float(trait.get("aggression", 0.5)), 0.0, 1.0)
+kite_intensity = clampf(float(trait.get("kite_intensity", 0.5)), 0.0, 1.0)
+retreat_ratio = clampf(float(trait.get("retreat_ratio", 0.35)), 0.0, 1.0)
+stick_to_teammates = clampf(float(trait.get("stick_to_teammates", 0.4)), 0.0, 1.0)
+prefers_bushes = bool(trait.get("prefers_bushes", False))
+hold_ground = bool(trait.get("hold_ground", False))
+allow_wall_attack = bool(brawler_info.get("ignore_walls_for_attacks", False))
+
+min_safe = 0.0 if hold_ground else attack_range * retreat_ratio
+ideal_far = attack_range * clampf(0.85 - aggression * 0.5, 0.2, 0.85)
+
+if debug:
+    print(
+        f"[individual_brawlers] brawler={_brawler_name} "
+        f"trait_source=file "
+        f"custom_movement_handled={custom_movement_handled} "
+        f"trait={trait} attack_range={attack_range:.1f} safe_range={safe_range:.1f} "
+        f"min_safe={min_safe:.1f} ideal_far={ideal_far:.1f}"
+    )
+
+
+# ═══════════════════════════════════════════════════════
+#  ATTACK HELPERS
+# ═══════════════════════════════════════════════════════
+
+def do_attack():
+    if not must_hold:
+        attack()
+        return
+
+    hold_attack_time = float(brawler_info.get("hold_attack", 0.0))
+
+    if persistent_data["time_since_holding_attack"] is None:
+        persistent_data["time_since_holding_attack"] = time.time()
+        attack(touch_up=False, touch_down=True)
+
+    elif time.time() - persistent_data["time_since_holding_attack"] >= hold_attack_time:
+        attack(touch_up=True, touch_down=False)
+        persistent_data["time_since_holding_attack"] = None
+
+def try_use_super(enemy_coords, enemy_distance):
+    if not is_super_ready:
+        return
+
+    if persistent_data["time_since_holding_attack"] is not None:
+        return
+
+    super_type = brawler_info.get("super_type", "damage")
+    enemy_hittable = is_enemy_hittable(player_pos, enemy_coords, walls, "super")
+
+    should_super = (
+        enemy_hittable and (
+            enemy_distance <= super_range
+            or super_type in ["spawnable", "other"]
+            or (
+                _brawler_name in ["stu", "surge"]
+                and super_type == "charge"
+                and enemy_distance <= super_range + attack_range
+            )
+        )
+    )
+
+    if should_super:
+        if is_hypercharge_ready:
+            use_hypercharge()
+        use_super()
+
+def try_attack(enemy_coords, enemy_distance, allow_wall_attack=False):
+    if enemy_distance > attack_range:
+        return False
+
+    enemy_hittable = is_enemy_hittable(player_pos, enemy_coords, walls, "attack")
+
+    if enemy_hittable or allow_wall_attack:
+        if is_gadget_ready and persistent_data["time_since_holding_attack"] is None:
+            if time.time() - persistent_data["last_gadget_use"] > 3.0:
+                use_gadget()
+                persistent_data["last_gadget_use"] = time.time()
+
+        do_attack()
+        return True
+
+    return False
+
+
+# ═══════════════════════════════════════════════════════
+#  HOLD ATTACK AUTO-RELEASE
+# ═══════════════════════════════════════════════════════
+
+if must_hold and persistent_data["time_since_holding_attack"] is not None:
+    hold_limit = float(brawler_info.get("hold_attack", 0.0)) + seconds_to_hold_attack_after_reaching_max
+    if time.time() - persistent_data["time_since_holding_attack"] >= hold_limit:
+        attack(touch_up=True, touch_down=False)
+        persistent_data["time_since_holding_attack"] = None
+
+
+# ═══════════════════════════════════════════════════════
+#  POISON GAS
+# ═══════════════════════════════════════════════════════
+
+def avoid_poison_gas():
+    poison_gas = is_there_poison_gas(player_data)
+    x = 0
+    y = 0
+
+    if poison_gas["up"] or poison_gas["down"]:
+        if poison_gas["up"] > poison_gas["down"]:
+            y = JOYSTICK_RADIUS
+        else:
+            y = -JOYSTICK_RADIUS
+
+    if poison_gas["left"] or poison_gas["right"]:
+        if poison_gas["left"] > poison_gas["right"]:
+            x = JOYSTICK_RADIUS
+        else:
+            x = -JOYSTICK_RADIUS
+
+    if x == 0 and y == 0:
+        return None
+
+    move = normalize_move(x, y)
+    return first_unblocked([move, (x, 0), (0, y)], move)
+
+
+# ═══════════════════════════════════════════════════════
+#  COMBAT MOVEMENT (trait-driven, per brawler)
+# ═══════════════════════════════════════════════════════
+
+def decide_combat_movement(enemy_coords, enemy_distance):
+    if not hold_ground and enemy_distance < min_safe:
+        branch = "retreat-strafe" if kite_intensity > 0.55 else "retreat-away"
+        result = strafe_around(enemy_coords) if kite_intensity > 0.55 else move_away_from(enemy_coords)
+    elif enemy_distance <= ideal_far:
+        branch = "ideal-strafe" if kite_intensity > 0.35 else "ideal-hold"
+        result = strafe_around(enemy_coords) if kite_intensity > 0.35 else (0, 0)
+    else:
+        branch = "approach"
+        result = move_toward(enemy_coords)
+
+    if debug:
+        print(
+            f"[individual_brawlers] decide_combat_movement branch={branch} "
+            f"enemy_distance={enemy_distance:.1f} (min_safe={min_safe:.1f}, ideal_far={ideal_far:.1f}) "
+            f"-> movement={tuple(round(v, 1) for v in result)}"
+        )
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════
+#  NO ENEMY / EXPLORATION (trait-driven, per brawler)
+# ═══════════════════════════════════════════════════════
+
+def find_closest_bush():
+    closest_distance = float('inf')
+    closest_bush = None
+    for bush in bushes:
+        bush_pos = get_entity_pos(bush)
+        distance = get_distance(bush_pos, player_pos)
+        if distance < closest_distance:
+            closest_distance = distance
+            closest_bush = bush_pos
+    return closest_bush, closest_distance
+
+def no_enemy_movement():
+    closest_teammate_coords, teammate_distance = find_closest_teammate(
+        teammate_data, player_pos, walls
+    )
+
+    if closest_teammate_coords is not None:
+        if teammate_distance is None or teammate_distance > TILE_SIZE * 3:
+            return move_toward(closest_teammate_coords)
+
+    forward = (0, -JOYSTICK_RADIUS)
+    if not is_blocked(forward):
+        return forward
+
+    return random_safe_movement()
+
+def no_enemy_movement_individual():
+    if stick_to_teammates > 0.5:
+        closest_teammate_coords, teammate_distance = find_closest_teammate(
+            teammate_data, player_pos, walls
+        )
+        if closest_teammate_coords is not None:
+            if debug:
+                print(f"[individual_brawlers] no_enemy branch=stick_to_teammates distance={teammate_distance}")
+            return move_toward(closest_teammate_coords)
+
+    if prefers_bushes:
+        closest_bush_coords, bush_distance = find_closest_bush()
+        if closest_bush_coords is not None and bush_distance > TILE_SIZE * 0.5:
+            if debug:
+                print(f"[individual_brawlers] no_enemy branch=seek_bush distance={bush_distance:.1f}")
+            return move_toward(closest_bush_coords)
+
+    if debug:
+        print("[individual_brawlers] no_enemy branch=generic_no_enemy_movement")
+    return no_enemy_movement()
+
+
+# ═══════════════════════════════════════════════════════
+#  MAIN BEHAVIOR TREE
+# ═══════════════════════════════════════════════════════
+# Skipped entirely if a per-brawler file (e.g. bolt.py) already computed
+# its own `movement` above — we trust it completely for this frame rather
+# than layering the generic ranged-combat model on top of it.
+
+if not custom_movement_handled:
+    enemy_coords = None
+    enemy_distance = None
+
+    if is_there_enemy(enemy_data):
+        enemy_coords, enemy_distance = find_closest_enemy(
+            enemy_data, player_pos, walls, "attack"
+        )
+
+    if debug:
+        print(f"[individual_brawlers] enemy_coords={enemy_coords} enemy_distance={enemy_distance} "
+              f"teammate_count={len(teammate_data)} wall_count={len(walls)}")
+
+    anti_gas_movement = avoid_poison_gas()
+
+    if anti_gas_movement is not None:
+        movement = anti_gas_movement
+        if debug:
+            print(f"[individual_brawlers] anti_gas_movement active -> movement={tuple(round(v, 1) for v in movement)}")
+
+        if enemy_coords is not None:
+            try_use_super(enemy_coords, enemy_distance)
+            try_attack(enemy_coords, enemy_distance, allow_wall_attack=allow_wall_attack)
+
+    else:
+        if enemy_coords is None:
+            movement = no_enemy_movement_individual()
+        else:
+            try_use_super(enemy_coords, enemy_distance)
+
+            # Always attack when in range/line of sight, independent of movement
+            try_attack(enemy_coords, enemy_distance, allow_wall_attack=allow_wall_attack)
+
+            movement = decide_combat_movement(enemy_coords, enemy_distance)
+
+            # Wall-blocked fallback while in combat
+            if is_blocked(movement):
+                if debug:
+                    print(f"[individual_brawlers] combat movement={tuple(round(v, 1) for v in movement)} was BLOCKED, falling back")
+                if enemy_distance < min_safe:
+                    movement = first_unblocked(
+                        [move_away_from(enemy_coords), strafe_around(enemy_coords), random_safe_movement()], movement
+                    )
+                else:
+                    movement = first_unblocked(
+                        [move_toward(enemy_coords), strafe_around(enemy_coords), random_safe_movement()], movement
+                    )
+                if debug:
+                    print(f"[individual_brawlers] wall-fallback movement -> {tuple(round(v, 1) for v in movement)}")
+
+
+# ═══════════════════════════════════════════════════════
+#  FINAL SAFETY
+# ═══════════════════════════════════════════════════════
+
+if movement is None:
+    movement = (0, 0)
+
+if is_path_blocked(player_data, movement, walls):
+    if debug:
+        print(f"[individual_brawlers] FINAL SAFETY: movement={tuple(round(v, 1) for v in movement)} still blocked, overriding with random_safe_movement()")
+    movement = random_safe_movement()
+
+if debug:
+    print(f"[individual_brawlers] FINAL movement={tuple(round(v, 1) for v in movement)}")

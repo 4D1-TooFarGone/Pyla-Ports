@@ -1,3 +1,5 @@
+const UI_API_TOKEN = document.querySelector('meta[name="pyla-ui-token"]')?.content || "";
+
 const NAV_ITEMS = {
     dashboard: { label: "Dashboard", icon: "dashboard" },
     queue: { label: "Brawlers", icon: "queue" },
@@ -1708,7 +1710,12 @@ async function handlePlaystyleImport(event) {
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch("/api/playstyles/import", { method: "POST", body: formData });
+    const response = await fetch("/api/playstyles/import", {
+        method: "POST",
+        body: formData,
+        headers: { "X-Pyla-UI-Token": UI_API_TOKEN },
+        credentials: "same-origin",
+    });
     const result = await response.json();
 
     if (!response.ok || !result.ok) {
@@ -1730,7 +1737,12 @@ async function handleQueueImport(event) {
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch("/api/queue/import", { method: "POST", body: formData });
+    const response = await fetch("/api/queue/import", {
+        method: "POST",
+        body: formData,
+        headers: { "X-Pyla-UI-Token": UI_API_TOKEN },
+        credentials: "same-origin",
+    });
     const result = await response.json().catch(() => ({}));
 
     if (!response.ok || !result.ok) {
@@ -1820,7 +1832,17 @@ function formatSignedNumber(value) {
 }
 
 async function fetchJSON(url, options = {}, allowFailure = false) {
-    const response = await fetch(url, options);
+    if (!UI_API_TOKEN) {
+        throw new Error("Local UI security token is missing.");
+    }
+
+    const headers = new Headers(options.headers || {});
+    headers.set("X-Pyla-UI-Token", UI_API_TOKEN);
+    const response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: "same-origin",
+    });
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok && !allowFailure) {

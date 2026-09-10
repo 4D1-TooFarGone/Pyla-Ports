@@ -1,3 +1,4 @@
+import heapq
 import math
 import random
 import time
@@ -15,7 +16,7 @@ except ImportError:
         return None
 from state_finder import get_state
 from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info, interpret_pyla_code, \
-    count_mask_pixels, JOYSTICK_RADIUS, clamp, config_bool
+    count_mask_pixels, JOYSTICK_RADIUS, clamp, config_bool, is_safe_ast
 
 
 brawl_stars_width, brawl_stars_height = 1920, 1080
@@ -88,6 +89,9 @@ class Play:
             "enemy": time.time(),
         }
         self.time_since_last_proceeding = time.time()
+        self.locked_enemy_targets = {}  # skill_type -> {"pos": (x, y), "last_seen": float}
+        self._path_cache = None  # {"start_cell", "goal_cell", "waypoints", "computed_at"}
+        self._last_path_waypoints = []
 
         self.last_movement = ''
         self.last_movement_change_time = time.time()
@@ -100,7 +104,15 @@ class Play:
         self.entity_detection_confidence = bot_config["entity_detection_confidence"]
         self.seconds_to_hold_attack_after_reaching_max = load_toml_as_dict("cfg/bot_config.toml")["seconds_to_hold_attack_after_reaching_max"]
         self.persistent_data = {"time_since_holding_attack": None}
-        self.pyla_code = pyla_code
+        if isinstance(pyla_code, str):
+            is_safe, error_msg = is_safe_ast(pyla_code)
+            if not is_safe:
+                print(f"Security/Syntax Validation Failed for playstyle: {error_msg}")
+                self.pyla_code = compile("", "<string>", "exec")
+            else:
+                self.pyla_code = compile(pyla_code, "<pyla_script>", "exec")
+        else:
+            self.pyla_code = pyla_code
         self.context = None
         self.frame = None
 
@@ -353,12 +365,20 @@ class Play:
             return False
         return True
 
+    TARGET_LOCK_MATCH_RADIUS = 150      # how close (px) counts as "still the same enemy, just moved"
+    TARGET_LOCK_TIMEOUT = 1.0           # forget the lock if we haven't matched it in this long
+    TARGET_LOCK_SWITCH_MARGIN = 0.85    # a new target must be at least ~15% closer to steal the lock
+
     def find_closest_enemy(self, enemy_data, player_coords, walls, skill_type):
         player_pos_x, player_pos_y = player_coords
         closest_hittable_distance = float('inf')
         closest_unhittable_distance = float('inf')
         closest_hittable = None
         closest_unhittable = None
+
+        lock = self.locked_enemy_targets.get(skill_type)
+        locked_candidate = None
+
         for enemy in enemy_data:
             enemy_pos = self.get_entity_pos(enemy)
             distance = self.get_distance(enemy_pos, player_coords)
@@ -370,12 +390,32 @@ class Play:
                 if distance < closest_unhittable_distance:
                     closest_unhittable_distance = distance
                     closest_unhittable = [enemy_pos, distance]
-        if closest_hittable:
-            return closest_hittable
-        elif closest_unhittable:
-            return closest_unhittable
 
-        return None, None
+            if lock is not None and self.get_distance(enemy_pos, lock["pos"]) <= self.TARGET_LOCK_MATCH_RADIUS:
+                if locked_candidate is None or distance < locked_candidate[1]:
+                    locked_candidate = [enemy_pos, distance]
+
+        best = closest_hittable if closest_hittable else closest_unhittable
+
+        chosen = best
+        now = time.time()
+        if (
+            locked_candidate is not None
+            and lock is not None
+            and now - lock["last_seen"] <= self.TARGET_LOCK_TIMEOUT
+            and (best is None or best[1] >= locked_candidate[1] * self.TARGET_LOCK_SWITCH_MARGIN)
+        ):
+            # Keep chasing the same enemy instead of flip-flopping to a
+            # different one that's only marginally closer this frame.
+            chosen = locked_candidate
+
+        if chosen is not None:
+            self.locked_enemy_targets[skill_type] = {"pos": chosen[0], "last_seen": now}
+        else:
+            self.locked_enemy_targets.pop(skill_type, None)
+            return None, None
+
+        return chosen
 
     def find_closest_teammate(self, teammate_data, player_coords, walls):
         closest_distance = float('inf')
@@ -387,6 +427,193 @@ class Play:
                 closest_distance = distance
                 closest_teammate = teammate_pos
         return closest_teammate, closest_distance
+
+    # ── Pathfinding ─────────────────────────────────────────────────────
+    # Grid-based A* over a local region around start/goal. Used instead of
+    # the old "try 2-3 fixed directions" reflex so playstyles can actually
+    # route around obstacles rather than just guessing a direction.
+    PATH_MAX_CELLS = 2400          # cap the search space so a worst case can't stall the loop
+    PATH_MARGIN_CELLS = 4          # extra grid margin around start/goal, in cells
+    PATH_RECOMPUTE_INTERVAL = 0.25  # seconds between replans, mirrors the wall refresh cadence
+    PATH_GOAL_MOVE_THRESHOLD_CELLS = 1.0
+    PATH_WAYPOINT_REACHED_RADIUS_TILES = 0.6
+
+    def _path_cell_size(self):
+        return max(1.0, self.TILE_SIZE * (self.window_controller.scale_factor or 1) / 2.0)
+
+    @staticmethod
+    def _inflate_walls(walls, radius):
+        inflated = []
+        for wall in walls:
+            x1, y1, x2, y2 = wall[:4]
+            inflated.append((x1 - radius, y1 - radius, x2 + radius, y2 + radius))
+        return inflated
+
+    @staticmethod
+    def _cell_blocked(cx, cy, cell_size, inflated_walls, origin_x, origin_y):
+        x1 = origin_x + cx * cell_size
+        y1 = origin_y + cy * cell_size
+        x2 = x1 + cell_size
+        y2 = y1 + cell_size
+        for wx1, wy1, wx2, wy2 in inflated_walls:
+            if x2 <= wx1 or x1 >= wx2 or y2 <= wy1 or y1 >= wy2:
+                continue
+            return True
+        return False
+
+    def _nearest_free_cell(self, cell, cell_size, inflated_walls, origin_x, origin_y, grid_w, grid_h, max_radius=5):
+        cx, cy = cell
+        for radius in range(1, max_radius + 1):
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+                    if max(abs(dx), abs(dy)) != radius:
+                        continue
+                    nx, ny = cx + dx, cy + dy
+                    if nx < 0 or ny < 0 or nx >= grid_w or ny >= grid_h:
+                        continue
+                    if not self._cell_blocked(nx, ny, cell_size, inflated_walls, origin_x, origin_y):
+                        return (nx, ny)
+        return None
+
+    def find_path(self, start, goal, walls):
+        """Grid A* from start to goal around wall rects. Returns a list of
+        world-coordinate waypoints (start..goal) or None if there's nothing
+        to route around, the goal is unreachable, or the search space is
+        too large for a real-time bot to search this frame."""
+        if not walls:
+            return None
+
+        cell_size = self._path_cell_size()
+        radius = PLAYER_HIT_CIRCLE_RADIUS * (self.window_controller.scale_factor or 1)
+        inflated_walls = self._inflate_walls(walls, radius)
+
+        margin = cell_size * self.PATH_MARGIN_CELLS
+        min_x = min(start[0], goal[0]) - margin
+        min_y = min(start[1], goal[1]) - margin
+        max_x = max(start[0], goal[0]) + margin
+        max_y = max(start[1], goal[1]) + margin
+
+        grid_w = int((max_x - min_x) / cell_size) + 1
+        grid_h = int((max_y - min_y) / cell_size) + 1
+        if grid_w <= 0 or grid_h <= 0 or grid_w * grid_h > self.PATH_MAX_CELLS:
+            return None
+
+        def to_cell(pos):
+            return (int((pos[0] - min_x) / cell_size), int((pos[1] - min_y) / cell_size))
+
+        def to_world(cell):
+            return (min_x + (cell[0] + 0.5) * cell_size, min_y + (cell[1] + 0.5) * cell_size)
+
+        start_cell = to_cell(start)
+        goal_cell = to_cell(goal)
+
+        if self._cell_blocked(goal_cell[0], goal_cell[1], cell_size, inflated_walls, min_x, min_y):
+            nearest = self._nearest_free_cell(goal_cell, cell_size, inflated_walls, min_x, min_y, grid_w, grid_h)
+            if nearest is None:
+                return None
+            goal_cell = nearest
+
+        neighbors = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+
+        open_heap = [(0.0, start_cell)]
+        came_from = {}
+        g_score = {start_cell: 0.0}
+        visited = set()
+        found = start_cell == goal_cell
+        expansions = 0
+
+        while open_heap and not found:
+            expansions += 1
+            if expansions > self.PATH_MAX_CELLS:
+                break
+            _, current = heapq.heappop(open_heap)
+            if current in visited:
+                continue
+            visited.add(current)
+            if current == goal_cell:
+                found = True
+                break
+            for dx, dy in neighbors:
+                neighbor = (current[0] + dx, current[1] + dy)
+                if not (0 <= neighbor[0] < grid_w and 0 <= neighbor[1] < grid_h):
+                    continue
+                if neighbor in visited:
+                    continue
+                if self._cell_blocked(neighbor[0], neighbor[1], cell_size, inflated_walls, min_x, min_y):
+                    continue
+                step_cost = math.hypot(dx, dy)
+                tentative_g = g_score[current] + step_cost
+                if tentative_g < g_score.get(neighbor, float('inf')):
+                    g_score[neighbor] = tentative_g
+                    came_from[neighbor] = current
+                    priority = tentative_g + self.get_distance(neighbor, goal_cell)
+                    heapq.heappush(open_heap, (priority, neighbor))
+
+        if not found:
+            return None
+
+        path_cells = [goal_cell]
+        while path_cells[-1] != start_cell:
+            prev = came_from.get(path_cells[-1])
+            if prev is None:
+                return None
+            path_cells.append(prev)
+        path_cells.reverse()
+
+        return [to_world(cell) for cell in path_cells]
+
+    def get_path_movement(self, start, goal, walls):
+        """Throttled/cached wrapper around find_path that returns a ready
+        joystick vector toward the next unreached waypoint. Falls back to a
+        direct vector toward goal if there's nothing to route around or
+        pathfinding gives up, so movement never just stalls."""
+        now = time.time()
+        cell_size = self._path_cell_size()
+        cache = self._path_cache
+
+        needs_recompute = True
+        if cache is not None:
+            age = now - cache["computed_at"]
+            goal_drift = self.get_distance(goal, cache["goal"])
+            start_drift = self.get_distance(start, cache["last_start"])
+            if (
+                age < self.PATH_RECOMPUTE_INTERVAL
+                and goal_drift < cell_size * self.PATH_GOAL_MOVE_THRESHOLD_CELLS
+                and start_drift < cell_size * 2
+            ):
+                needs_recompute = False
+
+        if needs_recompute:
+            waypoints = self.find_path(start, goal, walls)
+            self._path_cache = {
+                "goal": goal,
+                "last_start": start,
+                "waypoints": waypoints,
+                "computed_at": now,
+            }
+        else:
+            waypoints = cache["waypoints"]
+            cache["last_start"] = start
+
+        self._last_path_waypoints = waypoints or []
+
+        def direct_vector(target):
+            dx = target[0] - start[0]
+            dy = target[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length <= 0:
+                return (0.0, 0.0)
+            scale = JOYSTICK_RADIUS / length
+            return (dx * scale, dy * scale)
+
+        if not waypoints:
+            return direct_vector(goal)
+
+        reach_radius = cell_size * self.PATH_WAYPOINT_REACHED_RADIUS_TILES
+        while len(waypoints) > 1 and self.get_distance(start, waypoints[0]) <= reach_radius:
+            waypoints.pop(0)
+
+        return direct_vector(waypoints[0])
 
     def is_there_poison_gas(self, player_data, threshold=7000, area_from_player_checked=1.5):
         actual_player_box = self.get_actual_player_box(player_data) or player_data
@@ -553,6 +780,8 @@ class Play:
                 "height": brawl_stars_height,
                 'find_closest_enemy': self.find_closest_enemy,
                 'find_closest_teammate': self.find_closest_teammate,
+                'find_path': self.find_path,
+                'get_path_movement': self.get_path_movement,
                 'is_there_poison_gas': self.is_there_poison_gas,
                 'is_path_blocked': self.is_path_blocked,
                 'is_enemy_hittable': self.is_enemy_hittable,
@@ -586,10 +815,13 @@ class Play:
         x1, y1 = int(hypercharge_crop_area[0] * wr), int(hypercharge_crop_area[1] * hr)
         x2, y2 = int(hypercharge_crop_area[2] * wr), int(hypercharge_crop_area[3] * hr)
         screenshot = frame[y1:y2, x1:x2]
-        purple_pixels = count_hsv_pixels(screenshot, (137, 158, 159), (179, 255, 255))
+        purple_pixels = count_hsv_pixels(screenshot, (137, 158, 159), (179, 255, 255), self.window_controller)
         if self.verbose_debug:
             print("hypercharge purple pixels:", purple_pixels, "(if > ", self.hypercharge_pixels_minimum, " then hypercharge is ready)")
-            cv2.imwrite(f"debug_frames/hypercharge_debug_{purple_pixels}_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
+            try:
+                cv2.imwrite(f"debug_frames/hypercharge_debug_{purple_pixels}_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
+            except Exception:
+                pass
 
         if purple_pixels > self.hypercharge_pixels_minimum:
             return True
@@ -600,10 +832,13 @@ class Play:
         x1, y1 = int(gadget_crop_area[0] * wr), int(gadget_crop_area[1] * hr)
         x2, y2 = int(gadget_crop_area[2] * wr), int(gadget_crop_area[3] * hr)
         screenshot = frame[y1:y2, x1:x2]
-        green_pixels = count_hsv_pixels(screenshot, (57, 219, 165), (62, 255, 255))
+        green_pixels = count_hsv_pixels(screenshot, (57, 219, 165), (62, 255, 255), self.window_controller)
         if self.verbose_debug:
             print("gadget green pixels:", green_pixels, "(if > ", self.gadget_pixels_minimum, " then gadget is ready)")
-            cv2.imwrite(f"debug_frames/gadget_debug_{green_pixels}_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
+            try:
+                cv2.imwrite(f"debug_frames/gadget_debug_{green_pixels}_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
+            except Exception:
+                pass
 
         if green_pixels > self.gadget_pixels_minimum:
             return True
@@ -614,10 +849,13 @@ class Play:
         x1, y1 = int(super_crop_area[0] * wr), int(super_crop_area[1] * hr)
         x2, y2 = int(super_crop_area[2] * wr), int(super_crop_area[3] * hr)
         screenshot = frame[y1:y2, x1:x2]
-        yellow_pixels = count_hsv_pixels(screenshot, (17, 170, 200), (27, 255, 255))
+        yellow_pixels = count_hsv_pixels(screenshot, (17, 170, 200), (27, 255, 255), self.window_controller)
         if self.verbose_debug:
             print("super yellow pixels:", yellow_pixels, "(if > ", self.super_pixels_minimum, " then super is ready)")
-            cv2.imwrite(f"debug_frames/super_debug_{yellow_pixels}_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
+            try:
+                cv2.imwrite(f"debug_frames/super_debug_{yellow_pixels}_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
+            except Exception:
+                pass
 
         if yellow_pixels > self.super_pixels_minimum:
             return True
@@ -701,6 +939,7 @@ class Play:
             "enemy_los_lines": [],
             "teammate_los_lines": [],
             "player_hit_circle": None,
+            "path": [[int(v) for v in point] for point in (self._last_path_waypoints or [])],
         }
 
         if data:

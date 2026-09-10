@@ -1,3 +1,4 @@
+import ast
 import hashlib
 import html
 import io
@@ -138,6 +139,22 @@ PROJECT_ROOT = _get_project_root()
 def resolve_project_path(*parts) -> Path:
     return PROJECT_ROOT.joinpath(*parts)
 
+
+def resolve_within(base_path, *parts) -> Path:
+    base = resolve_project_path(base_path).resolve()
+    candidate = base.joinpath(*parts).resolve()
+    if candidate != base and not candidate.is_relative_to(base):
+        raise ValueError(f"Path escapes the allowed directory: {candidate}")
+    return candidate
+
+
+def resolve_playstyle_path(filename) -> Path:
+    filename = str(filename or "").strip()
+    if not filename or Path(filename).name != filename or not filename.lower().endswith(".pyla"):
+        raise ValueError("Invalid playstyle filename.")
+    return resolve_within("playstyles", filename)
+
+
 cached_toml = {}
 def load_toml_as_dict(file_path, cache=True):
     full_path = PROJECT_ROOT / str(file_path).lstrip('/\\')
@@ -175,10 +192,21 @@ api_base_url = cfg_api_base_url if cfg_api_base_url != "default" else default_ap
 brawlers_info_file_path = PROJECT_ROOT / "cfg" / "brawlers_info.json"
 
 
-def count_hsv_pixels(cv_image, low_hsv, high_hsv):
-    hsv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2HSV)
-    mask = cv2.inRange(hsv_image, low_hsv, high_hsv)
-    return cv2.countNonZero(mask)
+def count_hsv_pixels(cv_image, low_hsv, high_hsv, window_controller=None):
+    try:
+        hsv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2HSV)
+        mask = cv2.inRange(hsv_image, low_hsv, high_hsv)
+        return cv2.countNonZero(mask)
+    except cv2.error as e:
+        print(f"[ERROR CATCHING] OpenCV error occurred in count_hsv_pixels: {e}")
+        if cv_image is not None:
+            print(f"Crop image dimensions (width x height): {cv_image.shape[1]}x{cv_image.shape[0]}")
+        else:
+            print("Crop image is None")
+        if window_controller is not None:
+            print(f"WindowController state: width={window_controller.width}, height={window_controller.height}, width_ratio={window_controller.width_ratio}, height_ratio={window_controller.height_ratio}")
+            window_controller.reset_to_default_resolution()
+        return 0
 
 
 def count_mask_pixels(mask, x1, y1, x2, y2):
@@ -412,7 +440,7 @@ def save_brawler_icon(brawler_name):
     print(f"Icon not found for brawler '{brawler_name}'")
 
 
-PYLA_VERSION = "0.8.14"
+PYLA_VERSION = "0.8.15"
 
 
 def get_latest_version():
@@ -678,15 +706,17 @@ def get_brawler_icon_path(brawler_name: str) -> Path | None:
     if not brawler_name:
         return None
 
+    raw_name = str(brawler_name).lower().strip()
+    if "/" in raw_name or "\\" in raw_name or raw_name in {".", ".."}:
+        return None
     normalized = normalize_brawler_filename(brawler_name)
     candidates = [
-        resolve_project_path("api", "assets", "brawler_icons", f"{normalized}.png"),
-        resolve_project_path("api", "assets", "brawler_icons2", f"{str(brawler_name).lower()}.png"),
-        resolve_project_path("api", "assets", "brawler_icons2", f"{str(brawler_name).lower().strip()}.png"),
+        resolve_within(resolve_project_path("api", "assets", "brawler_icons"), f"{normalized}.png"),
+        resolve_within(resolve_project_path("api", "assets", "brawler_icons2"), f"{raw_name}.png"),
     ]
 
     for candidate in candidates:
-        if candidate.exists():
+        if candidate.is_file():
             return candidate
     return None
 
@@ -717,18 +747,84 @@ SAFE_GLOBALS = {
     'int': int,
     'float': float,
     'str': str,
+    'bool': bool,
+    'ValueError': ValueError,
+    'tuple': tuple,
     'print': print,
     'time_now': lambda: time.time(),
     'random_int': random.randint,
 }
 
 
+def is_safe_ast(code_str):
+    try:
+        tree = ast.parse(code_str)
+    except SyntaxError as e:
+        return False, f"Syntax Error: {e}"
+
+    for node in ast.walk(tree):
+        # 1. Block access to any attributes starting with underscore (e.g. __class__)
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith('_'):
+                return False, f"Access to private/dunder attribute '{node.attr}' is forbidden."
+
+        # 2. Block imports of any kind inside the script
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return False, "Imports are not allowed in playstyle scripts."
+
+        # 3. Block calling of eval, exec, compile, etc.
+        if isinstance(node, ast.Name):
+            if node.id in {'exec', 'eval', 'compile', 'getattr', 'setattr', 'delattr', '__import__', 'open', 'globals', 'locals', 'vars', 'breakpoint'}:
+                return False, f"Call to '{node.id}' is forbidden."
+
+    return True, None
+
+
+def run_brawler_trait(brawler_name, target_globals):
+    """Load and execute cfg/brawler_traits/<brawler_name>.py into target_globals.
+
+    This is the only way a sandboxed .pyla script can pull in another file's
+    code: the actual `open`/`exec` happen here, in trusted host code, never
+    inside the AST-checked script text. Returns True if a trait file was
+    found and executed, False otherwise (including on a validation failure).
+    """
+    try:
+        trait_path = resolve_within(resolve_project_path("cfg", "brawler_traits"), f"{brawler_name}.py")
+    except ValueError:
+        return False
+    if not trait_path.is_file():
+        return False
+
+    with open(trait_path, 'r', encoding='utf-8') as file:
+        trait_source = file.read()
+
+    is_safe, error_msg = is_safe_ast(trait_source)
+    if not is_safe:
+        print(f"Security/Syntax Validation Failed for brawler trait '{brawler_name}': {error_msg}")
+        return False
+
+    exec(compile(trait_source, f"<brawler_trait:{brawler_name}>", "exec"), target_globals)
+    return True
+
+
 def interpret_pyla_code(pyla_code, context):
     safe_globals = SAFE_GLOBALS.copy()
     safe_globals.update(context)
+    safe_globals['__builtins__'] = {}
+    safe_globals['run_brawler_trait'] = lambda brawler_name: run_brawler_trait(brawler_name, safe_globals)
+    safe_globals['get_context'] = lambda name, default=None: safe_globals.get(name, default)
 
     try:
-        exec(pyla_code, safe_globals)
+        if isinstance(pyla_code, str):
+            is_safe, error_msg = is_safe_ast(pyla_code)
+            if not is_safe:
+                print(f"Security/Syntax Validation Failed for playstyle: {error_msg}")
+                return None, safe_globals
+            compiled_code = compile(pyla_code, '<string>', 'exec')
+        else:
+            compiled_code = pyla_code
+
+        exec(compiled_code, safe_globals)
     except Exception as e:
         print(f"Error executing .pyla code")
         traceback.print_exc()
@@ -738,20 +834,20 @@ def interpret_pyla_code(pyla_code, context):
 
 
 def load_pyla_script(filename):
-    script_path = resolve_project_path("playstyles", filename)
     try:
+        script_path = resolve_playstyle_path(filename)
         with open(script_path, 'r', encoding='utf-8') as file:
             metadata_header = file.readline().strip()
             metadata = json.loads(metadata_header) if metadata_header else {}
             pyla_script = file.read()
         return metadata, pyla_script
     except FileNotFoundError:
-        print(f"Error: The file {script_path} was not found.")
-        return "", ""
+        print(f"Error: The playstyle file '{filename}' was not found.")
+        return {}, ""
     except Exception as e:
         print(f"An error occurred while loading the .pyla script: {e}")
         traceback.print_exc()
-        return "", ""
+        return {}, ""
 
 
 def get_playstyles_list():

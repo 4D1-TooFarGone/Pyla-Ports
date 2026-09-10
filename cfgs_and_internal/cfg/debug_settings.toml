@@ -1,4 +1,4 @@
-verbose_debug = false
+verbose_debug = true
 state_finder_debug = false
 re_apply_movement = false
 debug_view = false

@@ -25,7 +25,7 @@ class LobbyAutomation:
         hr = self.window_controller.height_ratio
         x_start, x_end = int(460 * wr), int(1460 * wr)
         y_start, y_end = int(400 * hr), int(675 * hr)
-        gray_pixels = count_hsv_pixels(frame[y_start:y_end, x_start:x_end], (0, 0, 10), (30, 60, 67))
+        gray_pixels = count_hsv_pixels(frame[y_start:y_end, x_start:x_end], (0, 0, 10), (30, 60, 67), self.window_controller)
         if self.verbose_debug: print(f"gray pixels (if > {self.gray_pixels_treshold} then bot will try to unidle) :", gray_pixels)
         if gray_pixels > self.gray_pixels_treshold:
             self.window_controller.click(self.idle_reconnect_coords[0], self.idle_reconnect_coords[1], already_include_ratio=False)

@@ -40,13 +40,53 @@ def online_devices():
     return out
 
 
+def adb_device_port_sort_key(device: AdbDevice) -> tuple[float, int, str]:
+    """Sort TCP/emulator ADB devices by their effective ADB port."""
+    serial = device.serial
+    if ":" in serial:
+        try:
+            return int(serial.rsplit(":", 1)[1]), 0, serial
+        except ValueError:
+            pass
+    if serial.startswith("emulator-"):
+        try:
+            # Emulator serials contain the console port; ADB uses the next port.
+            return int(serial.removeprefix("emulator-")) + 1, 1, serial
+        except ValueError:
+            pass
+    return float("inf"), 2, serial
+
+
 def discover_device(verbose: bool = False) -> AdbDevice:
-    preferred_port = load_toml_as_dict("cfg/general_config.toml")["emulator_port"]
-    candidates = [5137, 5555, 16384, 7555, 5635, 62001, 62025, 62026, 7556, 7565, 16416] + list(range(5556, 5566)) + list(range(5565, 5756, 10))
+    preferred_port = load_toml_as_dict("cfg/general_config.toml").get("emulator_port")
 
     def _safe_connect(port: int):
         dev = adb.connect(f"127.0.0.1:{port}")
         return dev
+
+    if preferred_port:
+        try:
+            port_str = str(preferred_port).strip()
+            if port_str.isdigit():
+                port_num = int(port_str)
+                if verbose:
+                    print(f"Attempting connection to configured preferred port: {port_num}")
+                try:
+                    _safe_connect(port_num)
+                except Exception:
+                    pass
+
+                devices = online_devices()
+                pref = next((d for d in devices if d.serial.endswith(f"{port_str}")), None)
+                if pref:
+                    if verbose:
+                        print(f"Successfully connected to configured preferred port: {pref.serial}")
+                    return pref
+        except Exception as e:
+            if verbose:
+                print(f"Warning: Error handling preferred port connection: {e}")
+
+    candidates = [5137, 5555, 16384, 7555, 5635, 62001, 62025, 62026, 7556, 7565, 16416] + list(range(5556, 5566)) + list(range(5565, 5756, 10)) + list(range(16385, 16415))
 
     def _try(port):
         try:
@@ -64,20 +104,14 @@ def discover_device(verbose: bool = False) -> AdbDevice:
     if not devices:
         raise ConnectionError("No ADB devices came online after scan.")
 
-    if preferred_port:
-        pref = next((d for d in devices if d.serial.endswith(f"{preferred_port}")), None)
-        if pref:
-            if verbose and len(devices) > 1:
-                print(f"Multiple devices online; using configured port {preferred_port} ({pref.serial})")
-            return pref
-
     if len(devices) == 1:
         return devices[0]
 
-    chosen = devices[0]
+    sorted_devices = sorted(devices, key=adb_device_port_sort_key)
+    chosen = sorted_devices[0]
     print(f"Multiple ADB devices online and no port configured. "
-          f"Picking {chosen.serial} (first one). Others: "
-          f"{[d.serial for d in devices if d is not chosen]}")
+          f"Picking {chosen.serial} (lowest ADB port). Others: "
+          f"{[d.serial for d in sorted_devices[1:]]}")
     return chosen
 
 class WindowController:
@@ -258,6 +292,15 @@ class WindowController:
             self.joystick_x, self.joystick_y = 220 * self.width_ratio, 870 * self.height_ratio
             self.scale_factor = min(self.width_ratio, self.height_ratio)
         return frame
+
+    def reset_to_default_resolution(self):
+        print("Resetting window controller dimensions to 1920x1080 and updating scale ratios...")
+        self.width = brawl_stars_width
+        self.height = brawl_stars_height
+        self.width_ratio = self.width / brawl_stars_width
+        self.height_ratio = self.height / brawl_stars_height
+        self.joystick_x, self.joystick_y = 220 * self.width_ratio, 870 * self.height_ratio
+        self.scale_factor = min(self.width_ratio, self.height_ratio)
 
     def touch_down(self, x, y, pointer_id=0):
         try:

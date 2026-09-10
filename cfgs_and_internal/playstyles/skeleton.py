@@ -46,6 +46,12 @@ bushes: List[List[float]] = []
 brawlers_info: Dict[str, Any] = {}
 """Dictionary containing parsed info from brawlers_info.json/toml."""
 
+# NOTE: per-brawler individual behavior tuning (see the "individual_brawlers"
+# playstyle) is NOT injected as a context variable. Instead, that playstyle
+# loads cfg/brawler_traits/<brawler_name>.py itself at runtime (one file per
+# brawler, either a simple BRAWLER_TRAIT dict or, for brawlers whose combat
+# doesn't fit the generic model at all, a full custom `movement` override).
+
 persistent_data: Dict[str, Any] = {"time_since_holding_attack": None}
 """Dictionary to keep track of variables across different frames/ticks."""
 

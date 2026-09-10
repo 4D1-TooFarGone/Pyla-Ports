@@ -259,6 +259,21 @@ def draw_lines(image, lines, color, thickness=6):
         cv2.line(image, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
 
 
+def draw_path(image, waypoints, color, thickness=4):
+    points = [p for p in (waypoints or []) if len(p) >= 2]
+    if len(points) < 1:
+        return
+
+    for point in points:
+        x, y = int(point[0]), int(point[1])
+        cv2.circle(image, (x, y), 6, color, -1, cv2.LINE_AA)
+
+    for start, end in zip(points, points[1:]):
+        x1, y1 = int(start[0]), int(start[1])
+        x2, y2 = int(end[0]), int(end[1])
+        cv2.line(image, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
+
+
 def draw_player_hit_circle(image, hit_circle):
     if not hit_circle or len(hit_circle) < 3:
         return
@@ -490,6 +505,7 @@ def draw_debug_data(image, debug_data, width, height):
     draw_range_circles(image, player_boxes, debug_data.get("attack_range"), debug_data.get("super_range"))
     draw_poison_gas_lines(image, player_boxes, debug_data.get("poison_gas"))
     draw_boxes(image, debug_data.get("wall"), (80, 80, 80), 3)
+    draw_path(image, debug_data.get("path"), (255, 255, 0))
     draw_boxes(image, player_boxes, (0, 255, 0))
     if advanced_visuals:
         draw_player_hit_circle(image, debug_data.get("player_hit_circle"))
